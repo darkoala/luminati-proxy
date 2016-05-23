@@ -19,8 +19,6 @@ $(function(){
             data: JSON.stringify(formData($new_proxy_form)),
             contentType: 'application/json'
         }).done(function(res){
-            // $new_proxy_btn.text('Save');
-            // $new_proxy.modal('hide');
             location.reload();
         }).fail(function(res){
             $new_proxy_btn.text('Save');
