@@ -16,7 +16,7 @@
 	  <% proxies.forEach(proxy=>{ %>
             <tr>
               <td><%= proxy.port %></td>
-              <td><%= proxy.conf %></td>
+              <td><%= proxy.display_opt %></td>
               <td>
                 <div class="progress progress-xs">
                   <div class="progress-bar progress-bar-danger" style="width: 55%"></div>
@@ -74,7 +74,7 @@
                   <div class=form-group>
                     <label class="col-sm-2 control-label">Password</label>
                     <div class=col-sm-10>
-                      <input type=password class=form-control name=password placeholder="zone password"><%# XXX lee change type to password??? %>
+                      <input type=password class=form-control name=password placeholder="zone password">
                     </div>
                   </div>
                 </div>

@@ -195,11 +195,33 @@ const create_web_interface = (proxies, hosts, ssl)=>etask(function*(){
         res.locals.path = req.path;
         next();
     });
-    app.get('/', (req, res)=>res.render('index', {
-        proxies: proxies,
-        elapsed: Date.now()-timestamp,
-        countries: countries,
-    }));
+    app.get('/', (req, res)=>{
+        for(let proxy of proxies)
+	{
+	    let display_opt = _.pick(proxy.opt, ['proxy', 'proxy_count',
+	        'zone', 'country', 'city', 'asn', 'dns', 'ssl',
+		'max_requests', 'session_timeout', 'direct_include',
+		'direct_exclude']);
+	    if (display_opt.password)
+	        display_opt.password='set';
+	    if (display_opt.proxy) {
+	        if (display_opt.proxy.length > 1)
+	            display_opt.proxy = '['+display_opt.proxy.join(', ')+']';
+		else
+		    display_opt.proxy = display.opt.proxy[0];
+	    }
+	    if (display_opt.ssl)
+	        display_opt.ssl = true;
+	    display_opt = _.pairs(display_opt).filter(pair=>pair[1])
+	        .map(pair=>pair.join(':'));
+	    proxy.display_opt = display_opt.join(', ');
+	}
+        res.render('index', {
+            proxies: proxies,
+            elapsed: Date.now()-timestamp,
+            countries: countries,
+        });
+    });
     app.get('/stats', (req, res, next)=>etask(function*(){
         let r = yield json({
             url: 'https://luminati.io/api/get_customer_bw?details=1',
