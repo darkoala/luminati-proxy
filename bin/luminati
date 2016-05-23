@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const dns = require('dns');
 const express = require('express');
+const body_parser = require('body-parser');
 const Luminati = require('../lib/luminati.js');
 const glob = require('glob');
 const request = require('request');
@@ -134,33 +135,37 @@ const resolve_super_proxies = ()=>etask(function*(){
     return [].concat.apply([], yield etask.all(hosts));
 });
 
-const create_proxies = hosts=>{
-    const ssl = argv.ssl && {
-        key: fs.readFileSync('./server.key'),
-        cert: fs.readFileSync('./server.crt'),
-        ca: fs.readFileSync('./ca.crt'),
-        requestCert: true,
-        rejectUnauthorized: false,
-    };
-    return etask.all(config.map(conf=>etask(function*(){
-        conf.proxy = conf.proxy || hosts;
-        if (conf.direct_include || conf.direct_exclude)
-        {
-            conf.direct = {};
-            if (conf.direct_include)
-                conf.direct.include = new RegExp(conf.direct_include, 'i');
-            if (conf.direct_exclude)
-                conf.direct.exclude = new RegExp(conf.direct_exclude, 'i');
-            delete conf.direct_include;
-            delete conf.direct_exclude;
-        }
-        const server = new Luminati(Object.assign(_.pick(argv, 'customer',
-            'password'), conf, {ssl: ssl}));
-        return yield server.listen();
-    })));
+const create_proxy = (conf, hosts, ssl)=>etask(function*(){
+    conf.proxy = conf.proxy || hosts;
+    if (conf.direct_include || conf.direct_exclude)
+    {
+        conf.direct = {};
+        if (conf.direct_include)
+            conf.direct.include = new RegExp(conf.direct_include, 'i');
+        if (conf.direct_exclude)
+            conf.direct.exclude = new RegExp(conf.direct_exclude, 'i');
+        delete conf.direct_include;
+        delete conf.direct_exclude;
+    }
+    const server = new Luminati(Object.assign(_.pick(argv, 'customer',
+        'password'), conf, {ssl: ssl}));
+    yield server.listen();
+    return server;
+});
+
+const create_ssl = ()=>argv.ssl && {
+    key: fs.readFileSync('./server.key'),
+    cert: fs.readFileSync('./server.crt'),
+    ca: fs.readFileSync('./ca.crt'),
+    requestCert: true,
+    rejectUnauthorized: false,
 };
 
-const create_web_interface = proxies=>etask(function*(){
+const create_proxies = (hosts, ssl)=>{
+    return etask.all(config.map(conf=>create_proxy(conf, hosts, ssl)));
+};
+
+const create_web_interface = (proxies, hosts, ssl)=>etask(function*(){
     const timestamp = Date.now();
     const app = express();
     const server = http.Server(app);
@@ -169,6 +174,7 @@ const create_web_interface = proxies=>etask(function*(){
         return {code: country.alpha2.toLowerCase(), name: country.name}; })
     .filter(country=>country.code && country.name)
     .sort((c1, c2)=>c1.name.localeCompare(c2.name));
+    app.use(body_parser.json());
     app.set('view engine', 'ejs');
     app.set('views', path.join(__dirname, 'views'));
     Object.assign(app.locals, {humanize: humanize, moment: moment});
@@ -189,6 +195,22 @@ const create_web_interface = proxies=>etask(function*(){
                 `lum-customer-${argv.customer}-zone-gen-key-${argv.password}`},
         })
         res.render('stats', {stats: r.body[argv.customer]||{}});
+    }));
+    app.post('/add_proxy', (req, res)=>etask(function*add_proxy(){
+        let conf = _.pick(req.body, ['port', 'password', 'proxy',
+	    'proxy_count', 'zone', 'country', 'city', 'asn', 'dns', 'ssl',
+	    'max_requests', 'session_timeout', 'direct_include',
+	    'direct_exclude']);
+	if (!conf.port||proxies.some(proxy=>proxy.port==conf.port)) {
+	    conf.port = proxies.reduce((port, proxy)=>{
+	        if (port<=proxy.port)
+                    return proxy.port+1;
+                return port;
+	    }, 23000);
+	}
+        let new_proxy = yield create_proxy(conf, hosts, ssl);
+        proxies.push(new_proxy);
+        res.json('OK');
     }));
     app.use(express.static(path.join(__dirname, 'public')));
     io.on('connection', socket=>etask(function*(){
@@ -228,11 +250,12 @@ etask(function*(){
     try {
         yield check_credentials();
         const hosts = yield resolve_super_proxies();
-        const proxies = yield create_proxies(hosts);
+	const ssl = create_ssl();
+        const proxies = yield create_proxies(hosts, ssl);
         proxies.forEach(server=>log('DEBUG', 'created local proxy', server.opt));
         if (argv.www)
         {
-            const server = yield create_web_interface(proxies);
+            const server = yield create_web_interface(proxies, hosts, ssl);
             console.log(`admin interface is available at http://127.0.0.1:${server.address().port}`);
         }
     } catch(e){ console.log(e, e.stack); }
