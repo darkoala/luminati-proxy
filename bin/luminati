@@ -18,6 +18,7 @@ const http = require('http');
 const socket_io = require('socket.io');
 const hutil = require('hutil');
 const etask = hutil.etask;
+const ef = etask.ef;
 const config_file = path.join(process.env.APPDATA||process.env.HOME, '.luminati.json');
 const argv = require('yargs').usage('Usage: $0 [options] config1 config2 ...')
 .alias({h: 'help'})
@@ -56,20 +57,13 @@ const argv = require('yargs').usage('Usage: $0 [options] config1 config2 ...')
 let opts = _.pick(argv, 'zone', 'country', 'city', 'asn', 'max_requests',
     'pool_size', 'log', 'session_timeout', 'direct_include', 'direct_exclude',
     'dns');
-let config = argv._.reduce((config, pattern)=>{
-    glob.sync(pattern).concat(config_file)
-    .filter(filename=>{
-        try {
-            fs.access(filename, fs.F_OK);
-        } catch(err){ return false; }
-    })
-    .forEach(filename=>{
-        [].push.apply(config, [].concat(JSON.parse(fs.readFileSync(filename,
-            {encoding: 'utf8'}))).map(conf=>Object.assign({}, opts, conf)));
-    });
-    return config;
-}, []);
-config = config.length && config || [opts];
+let config = [];
+try {
+    config = JSON.parse(fs.readFileSync(config_file, {encoding: 'utf8'}));
+} catch(e){ ef(e);
+    log('INFO', 'Failed to load config file: '+config_file, e);
+}
+config = config && config.length && config || [opts];
 config.filter(conf=>!conf.port)
     .forEach((conf, i)=>Object.assign(conf, {port: argv.p+i}));
 
@@ -165,6 +159,25 @@ const create_proxies = (hosts, ssl)=>{
     return etask.all(config.map(conf=>create_proxy(conf, hosts, ssl)));
 };
 
+const add_proxy = (conf, proxies, hosts, ssl)=>etask(function*add_proxy(){
+    if (!conf.port||proxies.some(proxy=>proxy.port==conf.port)) {
+        conf.port = proxies.reduce((port, proxy)=>{
+            if (port<=proxy.port)
+                return proxy.port+1;
+            return port;
+        }, 23000);
+    }
+    let new_proxy = yield create_proxy(conf, hosts, ssl);
+    proxies.push(new_proxy);
+    config.push(conf);
+    try {
+        fs.writeFileSync(config_file, JSON.stringify(config, null, 4), 'utf8');
+        log('INFO', 'Config file saved', config_file);
+    } catch(e){ ef(e);
+        log('WARNING', 'Failed to save the config file: '+config_file, e);
+    }
+});
+
 const create_web_interface = (proxies, hosts, ssl)=>etask(function*(){
     const timestamp = Date.now();
     const app = express();
@@ -182,7 +195,6 @@ const create_web_interface = (proxies, hosts, ssl)=>etask(function*(){
         res.locals.path = req.path;
         next();
     });
-    console.log(countries.all);
     app.get('/', (req, res)=>res.render('index', {
         proxies: proxies,
         elapsed: Date.now()-timestamp,
@@ -196,20 +208,12 @@ const create_web_interface = (proxies, hosts, ssl)=>etask(function*(){
         })
         res.render('stats', {stats: r.body[argv.customer]||{}});
     }));
-    app.post('/add_proxy', (req, res)=>etask(function*add_proxy(){
+    app.post('/add_proxy', (req, res)=>etask(function*add_proxy_route(){
         let conf = _.pick(req.body, ['port', 'password', 'proxy',
 	    'proxy_count', 'zone', 'country', 'city', 'asn', 'dns', 'ssl',
 	    'max_requests', 'session_timeout', 'direct_include',
 	    'direct_exclude']);
-	if (!conf.port||proxies.some(proxy=>proxy.port==conf.port)) {
-	    conf.port = proxies.reduce((port, proxy)=>{
-	        if (port<=proxy.port)
-                    return proxy.port+1;
-                return port;
-	    }, 23000);
-	}
-        let new_proxy = yield create_proxy(conf, hosts, ssl);
-        proxies.push(new_proxy);
+        yield add_proxy(conf, proxies, hosts, ssl);
         res.json('OK');
     }));
     app.use(express.static(path.join(__dirname, 'public')));
@@ -222,11 +226,11 @@ const create_web_interface = (proxies, hosts, ssl)=>etask(function*(){
         try {
             yield json('http://lumtest.com/myip');
             notify('network', true);
-        } catch(e){ notify('network', false); }
+        } catch(e){ ef(e); notify('network', false); }
         try {
             yield json('http://zproxy.luminati.io:22225/');
             notify('firewall', true);
-        } catch(e){ notify('firewall', false); }
+        } catch(e){ ef(e); notify('firewall', false); }
         try {
             let res = yield json({
                 url: 'http://zproxy.luminati.io:22225/',
@@ -234,7 +238,7 @@ const create_web_interface = (proxies, hosts, ssl)=>etask(function*(){
                     `lum-customer-${argv.customer}-zone-gen-key-${argv.password}`},
             });
             notify('credentials', res.statusCode!=407);
-        } catch(e){ notify('credentials', false); }
+        } catch(e){ ef(e); notify('credentials', false); }
     }));
     setInterval(()=>{
         const stats = {};
@@ -258,5 +262,5 @@ etask(function*(){
             const server = yield create_web_interface(proxies, hosts, ssl);
             console.log(`admin interface is available at http://127.0.0.1:${server.address().port}`);
         }
-    } catch(e){ console.log(e, e.stack); }
+    } catch(e){ ef(e); console.log(e, e.stack); }
 });

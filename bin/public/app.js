@@ -2,7 +2,7 @@ $(function(){
     'use strict'; /*jslint browser:true*/
     function formData($form){
         var dataArr = $form.serializeArray();
-        data = {};
+        var data = {};
         dataArr.forEach(function(item){
             data[item.name]=item.value;
         });
