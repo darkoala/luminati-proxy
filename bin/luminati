@@ -213,6 +213,11 @@ const create_web_interface = (proxies, hosts, ssl)=>etask(function*(){
 	    'proxy_count', 'zone', 'country', 'city', 'asn', 'dns', 'ssl',
 	    'max_requests', 'session_timeout', 'direct_include',
 	    'direct_exclude']);
+	for(let prop of Object.keys(conf))
+	{
+            if (!conf[prop])
+	        delete conf[prop];
+	}
         yield add_proxy(conf, proxies, hosts, ssl);
         res.json('OK');
     }));
